@@ -1,5 +1,4 @@
 const Interview = require('../models/Interview');
-const User = require('../models/User');
 const { processPDF } = require('./pdfService');
 
 /**
@@ -12,18 +11,9 @@ const { processPDF } = require('./pdfService');
 async function createInterview(userId, jobRole, resumeText) {
   try {
     console.log('Creating interview for user:', userId);
-    
-    // Find the user by Firebase UID
-    const user = await User.findOne({ uid: userId });
-    if (!user) {
-      console.error('User not found for UID:', userId);
-      throw new Error('User not found');
-    }
-
-    console.log('Found user:', user._id);
 
     const interview = new Interview({
-      user: user._id, // Use MongoDB _id from the found user
+      user: userId,
       jobRole,
       resumeText,
       status: 'pending',
@@ -54,14 +44,7 @@ async function getUserInterviews(userId) {
   try {
     console.log('Fetching interviews for user:', userId);
     
-    // Find the user by Firebase UID
-    const user = await User.findOne({ uid: userId });
-    if (!user) {
-      console.error('User not found for UID:', userId);
-      throw new Error('User not found');
-    }
-    
-    const interviews = await Interview.find({ user: user._id })
+    const interviews = await Interview.find({ user: userId })
       .sort({ createdAt: -1 })
       .exec();
     

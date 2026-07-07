@@ -43,7 +43,7 @@ router.post('/start', authMiddleware, upload.single('resume'), async (req, res) 
     console.log('Processing PDF and creating interview...');
     // Process PDF and create interview
     const resumeText = await processPDF(resume.buffer);
-    const interview = await createInterview(req.user.uid, jobRole, resumeText);
+    const interview = await createInterview(req.user._id, jobRole, resumeText);
 
     console.log('Generating first question...');
     // Generate first question
@@ -182,7 +182,7 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     console.log('Fetching interviews for user:', req.user.uid);
     
-    const interviews = await getUserInterviews(req.user.uid);
+    const interviews = await getUserInterviews(req.user._id);
     
     console.log(`Found ${interviews.length} interviews for user:`, req.user.uid);
     res.status(200).json({

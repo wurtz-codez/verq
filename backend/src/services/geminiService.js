@@ -1,16 +1,9 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { config } = require('../config/config');
 
-/**
- * Generate a brief interview question based on the resume text and role using Google's Gemini AI
- * @param {string} resumeText - Extracted text from the resume
- * @param {string} role - The role the candidate is applying for
- * @returns {Promise<string>} - Generated interview question
- */
-async function generateInterviewQuestion(resumeText, role) {
-  const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
+const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 
-  const prompt = `Based on the following resume text and the role the candidate is applying for, generate a single technical interview question and should be brief with around 2-3 lines. 
+const questionPrompt = (resumeText, role) => `Based on the following resume text and the role the candidate is applying for, generate a single technical interview question and should be brief with around 2-3 lines. 
   The question should be moderate to high difficulty and should focus on:
   1. The projects mentioned in the resume
   2. The technical skills listed
@@ -27,38 +20,13 @@ async function generateInterviewQuestion(resumeText, role) {
   
   Generate only the question, without any additional explanation or context.`;
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text().trim();
-  } catch (error) {
-    console.error('Error generating interview question with Gemini:', error);
-    
-    if (error.message.includes('API key')) {
-      throw new Error(
-        'Invalid Gemini API key. Please check your .env file and ensure GEMINI_API_KEY is set correctly.'
-      );
-    } else if (error.message.includes('quota')) {
-      throw new Error(
-        'Gemini API quota exceeded. Please check your Google Cloud Console for quota limits.'
-      );
-    } else {
-      throw new Error(`Failed to generate interview question: ${error.message}`);
-    }
-  }
+async function generateInterviewQuestion(resumeText, role) {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const result = await model.generateContent(questionPrompt(resumeText, role));
+  return (await result.response).text().trim();
 }
 
-/**
- * Evaluate an interview answer using Google's Gemini AI
- * @param {string} question - The interview question
- * @param {string} answer - The candidate's answer transcript
- * @returns {Promise<Object>} - Evaluation results with scores and feedback
- */
-async function evaluateAnswer(question, answer) {
-  const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
-
-  const prompt = `You are an expert technical interviewer. Please evaluate the following interview answer based on the question asked.
+const evaluationPrompt = (question, answer) => `You are an expert technical interviewer. Please evaluate the following interview answer based on the question asked.
 
 Question: ${question}
 
@@ -84,70 +52,31 @@ Please provide a concise evaluation in the following format:
 
 Keep explanations brief and focused on the most important points.`;
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const evaluationText = response.text().trim();
+const extractScore = (text, pattern) => { const m = text.match(pattern); return m ? parseInt(m[1]) : 0; };
+const extractText = (text, pattern) => { const m = text.match(pattern); return m ? m[1].trim() : ''; };
+const extractBullets = (text, pattern) => {
+  const m = text.match(pattern);
+  if (!m) return [];
+  return m[1].trim().split('\n').map(p => p.replace(/^[-•*]\s*/, '').trim()).filter(p => p);
+};
 
-    // Helper function to safely extract scores
-    const extractScore = (text, pattern) => {
-      const match = text.match(pattern);
-      return match ? parseInt(match[1]) : 0;
-    };
+const parseEvaluation = (text) => ({
+  clarity: { score: extractScore(text, /Clarity Score \(1-10\): (\d+)/), explanation: extractText(text, /Brief explanation: (.*?)(?=\n|$)/s) },
+  technicalAccuracy: { score: extractScore(text, /Technical Accuracy Score \(1-10\): (\d+)/), explanation: extractText(text, /Brief explanation: (.*?)(?=\n|$)/s) },
+  language: { score: extractScore(text, /Language & Communication Score \(1-10\): (\d+)/), explanation: extractText(text, /Brief explanation: (.*?)(?=\n|$)/s) },
+  strengths: extractBullets(text, /Key Strengths: (.*?)(?=\n|$)/s),
+  areasForImprovement: extractBullets(text, /Main Areas to Improve: (.*?)(?=\n|$)/s),
+  recommendations: extractBullets(text, /Top Recommendations: (.*?)(?=\n|$)/s),
+  overallScore: extractScore(text, /Final Score \(1-10\): (\d+)/),
+});
 
-    // Helper function to safely extract text
-    const extractText = (text, pattern) => {
-      const match = text.match(pattern);
-      return match ? match[1].trim() : '';
-    };
-
-    // Helper function to safely extract bullet points
-    const extractBulletPoints = (text, pattern) => {
-      const match = text.match(pattern);
-      if (!match) return [];
-      return match[1].trim().split('\n')
-        .map(point => point.replace(/^[-•*]\s*/, '').trim())
-        .filter(point => point.length > 0);
-    };
-
-    const evaluation = {
-      clarity: {
-        score: extractScore(evaluationText, /Clarity Score \(1-10\): (\d+)/),
-        explanation: extractText(evaluationText, /Brief explanation: (.*?)(?=\n|$)/s)
-      },
-      technicalAccuracy: {
-        score: extractScore(evaluationText, /Technical Accuracy Score \(1-10\): (\d+)/),
-        explanation: extractText(evaluationText, /Brief explanation: (.*?)(?=\n|$)/s)
-      },
-      language: {
-        score: extractScore(evaluationText, /Language & Communication Score \(1-10\): (\d+)/),
-        explanation: extractText(evaluationText, /Brief explanation: (.*?)(?=\n|$)/s)
-      },
-      strengths: extractBulletPoints(evaluationText, /Key Strengths: (.*?)(?=\n|$)/s),
-      areasForImprovement: extractBulletPoints(evaluationText, /Main Areas to Improve: (.*?)(?=\n|$)/s),
-      recommendations: extractBulletPoints(evaluationText, /Top Recommendations: (.*?)(?=\n|$)/s),
-      overallScore: extractScore(evaluationText, /Final Score \(1-10\): (\d+)/)
-    };
-
-    return evaluation;
-  } catch (error) {
-    console.error('Error evaluating answer with Gemini:', error);
-    throw new Error(`Failed to evaluate answer: ${error.message}`);
-  }
+async function evaluateAnswer(question, answer) {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const result = await model.generateContent(evaluationPrompt(question, answer));
+  return parseEvaluation((await result.response).text().trim());
 }
 
-/**
- * Generate a follow-up question based on the previous answer and evaluation
- * @param {string} resumeText - Extracted text from the resume
- * @param {string} previousQuestion - The previous question asked
- * @param {string} answer - The candidate's answer
- * @param {Object} evaluation - The evaluation of the previous answer
- * @returns {Promise<string>} - Generated follow-up question
- */
 async function generateFollowUpQuestion(resumeText, previousQuestion, answer, evaluation) {
-  const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
-
   const prompt = `Based on the following information, generate a follow-up question:
 
 Previous Question: ${previousQuestion}
@@ -162,19 +91,13 @@ ${resumeText}
 
 Generate only the question, without any additional explanation or context.`;
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text().trim();
-  } catch (error) {
-    console.error('Error generating follow-up question with Gemini:', error);
-    throw new Error(`Failed to generate follow-up question: ${error.message}`);
-  }
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const result = await model.generateContent(prompt);
+  return (await result.response).text().trim();
 }
 
 module.exports = {
   generateInterviewQuestion,
   evaluateAnswer,
   generateFollowUpQuestion
-}; 
+};

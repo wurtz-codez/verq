@@ -132,17 +132,18 @@ function Interview() {
               
               <div className="w-full">
                 <input
+                  id="resume-upload"
                   type="file"
                   accept=".pdf"
                   onChange={handleResumeUpload}
-                  className="block w-full text-sm text-gray-500
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-full file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-white/10 file:text-white
-                    hover:file:bg-white/15
-                    dark:file:bg-white/10 dark:file:text-white"
+                  className="hidden"
                 />
+                <label
+                  htmlFor="resume-upload"
+                  className="block w-full cursor-pointer text-center py-3 px-6 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 text-white text-sm font-semibold transition-all duration-200"
+                >
+                  {resume ? resume.name : 'Choose Resume PDF'}
+                </label>
                 {resume && (
                   <div className="mt-2 flex items-center justify-between">
                     <span className="text-sm text-paragraph">
