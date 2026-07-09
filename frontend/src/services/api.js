@@ -136,6 +136,11 @@ export const api = {
       headers: {}
     }),
 
+  completeInterview: (interviewId) =>
+    fetchData(`/interview/${interviewId}/complete`, {
+      method: 'POST',
+    }),
+
   // Generic methods for custom endpoints
   get: (endpoint) => fetchData(endpoint),
   post: (endpoint, data, options = {}) => 

@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middleware/authMiddleware');
 const Interview = require('../models/Interview');
-const { createInterview, getUserInterviews, updateInterviewStatus, addQuestionAnswer } = require('../services/interviewService');
+const { createInterview, getUserInterviews, updateInterviewStatus, addQuestionAnswer, completeInterview } = require('../services/interviewService');
 const { processPDF } = require('../services/pdfService');
-const { generateInterviewQuestion, evaluateAnswer } = require('../services/geminiService');
+const { generateInterviewQuestion, evaluateAnswer, generateSummaryEvaluation } = require('../services/geminiService');
 const { speechToText } = require('../services/deepgramService');
 const multer = require('multer');
 
@@ -141,29 +141,44 @@ router.post('/:interviewId/answer', authMiddleware, upload.single('audio'), asyn
 
     console.log('Adding question and answer to interview...');
     // Add question and answer to interview
-    await addQuestionAnswer(
+    const updatedInterview = await addQuestionAnswer(
       req.params.interviewId,
       currentQuestion,
       transcript,
       evaluation
     );
 
-    console.log('Generating next question...');
-    // Generate next question
-    const interview = await Interview.findById(req.params.interviewId);
-    const nextQuestion = await generateInterviewQuestion(
-      interview.resumeText,
-      interview.jobRole
-    );
+    const questionCount = updatedInterview.questions.length;
+    console.log(`Question ${questionCount} answered.`);
 
-    console.log('Answer processed successfully:', req.params.interviewId);
-    res.status(200).json({
-      status: 'success',
-      data: {
-        nextQuestion,
-        evaluation
-      }
-    });
+    if (questionCount >= 5) {
+      console.log('All 5 questions answered. Interview complete.');
+      res.status(200).json({
+        status: 'success',
+        data: {
+          completed: true,
+          nextQuestion: null,
+          evaluation
+        }
+      });
+    } else {
+      console.log('Generating next question...');
+      const interview = await Interview.findById(req.params.interviewId);
+      const nextQuestion = await generateInterviewQuestion(
+        interview.resumeText,
+        interview.jobRole
+      );
+
+      console.log('Answer processed successfully:', req.params.interviewId);
+      res.status(200).json({
+        status: 'success',
+        data: {
+          completed: false,
+          nextQuestion,
+          evaluation
+        }
+      });
+    }
   } catch (error) {
     console.error('Error in /:interviewId/answer route:', {
       interviewId: req.params.interviewId,
@@ -173,6 +188,48 @@ router.post('/:interviewId/answer', authMiddleware, upload.single('audio'), asyn
     res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to process answer'
+    });
+  }
+});
+
+// Complete interview and generate summary evaluation
+router.post('/:interviewId/complete', authMiddleware, async (req, res) => {
+  try {
+    console.log('Completing interview:', req.params.interviewId);
+
+    const interview = await Interview.findById(req.params.interviewId);
+    if (!interview) {
+      return res.status(404).json({ status: 'error', message: 'Interview not found' });
+    }
+    if (interview.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ status: 'error', message: 'Unauthorized' });
+    }
+    if (interview.status === 'completed') {
+      return res.status(200).json({
+        status: 'success',
+        data: { summary: interview.evaluationSummary }
+      });
+    }
+
+    const questions = interview.questions.map(q => ({
+      question: q.question,
+      answer: q.answer,
+      evaluation: q.evaluation
+    }));
+
+    const summary = await generateSummaryEvaluation(questions);
+    await completeInterview(req.params.interviewId, summary);
+
+    console.log('Interview completed with summary:', req.params.interviewId);
+    res.status(200).json({
+      status: 'success',
+      data: { summary }
+    });
+  } catch (error) {
+    console.error('Error in /complete route:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to complete interview'
     });
   }
 });

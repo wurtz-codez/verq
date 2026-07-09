@@ -142,9 +142,36 @@ async function addQuestionAnswer(interviewId, question, answer, evaluation) {
   }
 }
 
+async function completeInterview(interviewId, summaryEvaluation) {
+  try {
+    console.log('Completing interview:', interviewId);
+
+    const interview = await Interview.findByIdAndUpdate(
+      interviewId,
+      {
+        status: 'completed',
+        evaluationSummary: summaryEvaluation,
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!interview) {
+      throw new Error('Interview not found');
+    }
+
+    console.log('Interview completed successfully:', interviewId);
+    return interview;
+  } catch (error) {
+    console.error('Error in completeInterview:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   createInterview,
   getUserInterviews,
   updateInterviewStatus,
-  addQuestionAnswer
+  addQuestionAnswer,
+  completeInterview,
 }; 

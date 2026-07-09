@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../services/api';
 
@@ -34,19 +34,41 @@ const ServiceNode = ({ service, status, isActive }) => (
   </motion.div>
 );
 
+function ScoreCard({ label, score, explanation, color }) {
+  const barColor = score >= 7 ? 'bg-green-500' : score >= 5 ? 'bg-yellow-500' : 'bg-red-500';
+  return (
+    <motion.div
+      className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-6"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+    >
+      <h3 className="text-sm font-semibold text-gray-400 mb-2">{label}</h3>
+      <div className="text-4xl font-bold text-white mb-2">{score}/10</div>
+      <div className="w-full bg-gray-700/30 rounded-full h-2 mb-3">
+        <div className={`h-full ${barColor} rounded-full transition-all duration-500`} style={{ width: `${(score / 10) * 100}%` }} />
+      </div>
+      <p className="text-sm text-gray-400">{explanation}</p>
+    </motion.div>
+  );
+}
+
 function InterviewSession() {
+  const navigate = useNavigate();
   const { interviewId: paramsInterviewId } = useParams();
   const [interview, setInterview] = useState(null);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [completed, setCompleted] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [isCompleting, setIsCompleting] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const [serviceStatus, setServiceStatus] = useState({
     pdfExtraction: 'pending',
     geminiQuestion: 'pending',
-    textToSpeech: 'pending',
     speechToText: 'pending',
     geminiEvaluation: 'pending'
   });
@@ -55,22 +77,19 @@ function InterviewSession() {
   const [recordingTime, setRecordingTime] = useState(0);
   const timerRef = useRef(null);
 
-  // Get the actual interviewId from either params or localStorage
   const interviewId = paramsInterviewId || (() => {
     const savedInterview = localStorage.getItem('currentInterview');
     if (savedInterview) {
       try {
         const { id } = JSON.parse(savedInterview);
         return id;
-      } catch (err) {
-        console.error('Error parsing saved interview:', err);
-        return null;
-      }
+      } catch { return null; }
     }
     return null;
   })();
 
-  // Fetch interview data and set initial question
+  const questionCount = interview?.questions?.length || 0;
+
   useEffect(() => {
     const fetchInterview = async () => {
       if (!interviewId) {
@@ -78,46 +97,34 @@ function InterviewSession() {
         setIsLoading(false);
         return;
       }
-
       try {
         setActiveService('pdfExtraction');
         setServiceStatus(prev => ({ ...prev, pdfExtraction: 'in_progress' }));
 
         const { data } = await api.getInterviewById(interviewId);
         setInterview(data);
-        
-        // Set current question only if it's not already set
-        if (!currentQuestion) {
-          // First try to get the last question from the questions array
+
+        if (data.status === 'completed' && data.evaluationSummary) {
+          setCompleted(true);
+          setSummary(data.evaluationSummary);
+        } else if (!currentQuestion) {
           const lastQuestion = data.questions?.[data.questions.length - 1]?.question;
           if (lastQuestion) {
             setCurrentQuestion(lastQuestion);
           } else {
-            // If no questions in the array, try to get the current question from the interview data
-            if (data.currentQuestion) {
-              setCurrentQuestion(data.currentQuestion);
+            const savedInterview = localStorage.getItem('currentInterview');
+            if (savedInterview) {
+              try {
+                const { question } = JSON.parse(savedInterview);
+                if (question) setCurrentQuestion(question);
+                else setError('No questions available for this interview');
+              } catch { setError('No questions available for this interview'); }
             } else {
-              // If still no question, try to get it from localStorage
-              const savedInterview = localStorage.getItem('currentInterview');
-              if (savedInterview) {
-                try {
-                  const { question } = JSON.parse(savedInterview);
-                  if (question) {
-                    setCurrentQuestion(question);
-                  } else {
-                    setError('No questions available for this interview');
-                  }
-                } catch (err) {
-                  console.error('Error parsing saved interview:', err);
-                  setError('No questions available for this interview');
-                }
-              } else {
-                setError('No questions available for this interview');
-              }
+              setError('No questions available for this interview');
             }
           }
         }
-        
+
         setServiceStatus(prev => ({ ...prev, pdfExtraction: 'completed' }));
         setActiveService(null);
         setIsLoading(false);
@@ -126,27 +133,21 @@ function InterviewSession() {
         setIsLoading(false);
       }
     };
-
     fetchInterview();
-  }, [interviewId]); // Only depend on interviewId
+  }, [interviewId]);
 
   const startRecording = async () => {
     try {
-      // Reset states
       setAudioURL(null);
       setRecordingTime(0);
       audioChunksRef.current = [];
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
       mediaRecorder.onstop = async () => {
@@ -156,53 +157,48 @@ function InterviewSession() {
         await submitAnswer(audioBlob);
       };
 
-      // Start recording
-      mediaRecorder.start(1000); // Collect data every second
+      mediaRecorder.start(1000);
       setIsRecording(true);
 
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
+      timerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
     } catch (err) {
-      console.error('Recording error:', err);
       setError('Failed to start recording. Please check your microphone permissions.');
     }
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      // Stop the media recorder
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-      
-      // Clear timer
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
       setIsRecording(false);
     }
   };
 
-  // Cleanup on unmount
+  const handleEndInterview = async () => {
+    if (!interviewId) return;
+    setIsCompleting(true);
+    try {
+      const { data } = await api.completeInterview(interviewId);
+      setSummary(data.summary);
+      setCompleted(true);
+    } catch (err) {
+      setError(err.message || 'Failed to complete interview');
+    } finally {
+      setIsCompleting(false);
+    }
+  };
+
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      if (audioURL) {
-        URL.revokeObjectURL(audioURL);
-      }
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (audioURL) URL.revokeObjectURL(audioURL);
     };
   }, [audioURL]);
 
   const submitAnswer = async (audioBlob) => {
     try {
-      if (!interviewId) {
-        throw new Error('Interview ID is missing');
-      }
+      if (!interviewId) throw new Error('Interview ID is missing');
 
       setActiveService('speechToText');
       setServiceStatus(prev => ({ ...prev, speechToText: 'in_progress' }));
@@ -212,40 +208,32 @@ function InterviewSession() {
       formData.append('currentQuestion', currentQuestion);
 
       setActiveService('geminiEvaluation');
-      setServiceStatus(prev => ({ 
-        ...prev, 
+      setServiceStatus(prev => ({
+        ...prev,
         speechToText: 'completed',
-        geminiEvaluation: 'in_progress' 
+        geminiEvaluation: 'in_progress'
       }));
 
       const { data } = await api.submitAnswer(interviewId, formData);
 
-      setServiceStatus(prev => ({ 
-        ...prev, 
-        geminiEvaluation: 'completed',
-        geminiQuestion: 'in_progress' 
-      }));
-      setActiveService('geminiQuestion');
+      setServiceStatus(prev => ({ ...prev, geminiEvaluation: 'completed' }));
+      setActiveService(null);
 
-      // Update current question with the next one
-      if (data.nextQuestion) {
-        setCurrentQuestion(data.nextQuestion);
-      }
-      
-      // Refresh interview data to show updated questions
       const { data: updatedInterview } = await api.getInterviewById(interviewId);
       setInterview(updatedInterview);
 
-      setServiceStatus(prev => ({ ...prev, geminiQuestion: 'completed' }));
-      setActiveService(null);
+      if (data.completed) {
+        setCompleted(true);
+        const { data: completeData } = await api.completeInterview(interviewId);
+        setSummary(completeData.summary);
+      } else if (data.nextQuestion) {
+        setCurrentQuestion(data.nextQuestion);
+      }
     } catch (err) {
       console.error('Error submitting answer:', err);
       setError(err.message || 'Failed to submit answer');
       setServiceStatus(prev => ({
-        ...prev,
-        speechToText: 'pending',
-        geminiEvaluation: 'pending',
-        geminiQuestion: 'pending'
+        ...prev, speechToText: 'pending', geminiEvaluation: 'pending', geminiQuestion: 'pending'
       }));
       setActiveService(null);
     }
@@ -253,18 +241,110 @@ function InterviewSession() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen pt-20 sm:pt-32 px-4 sm:px-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      <div className="min-h-screen pt-32 px-8 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
       </div>
     );
   }
 
-  if (error) {
+  if (error && !interview) {
     return (
-      <div className="min-h-screen pt-20 sm:pt-32 px-4 sm:px-8">
+      <div className="min-h-screen pt-32 px-8">
         <div className="max-w-4xl mx-auto">
-          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500 text-center text-sm sm:text-base">
-            {error}
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500 text-center">{error}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (completed && summary) {
+    return (
+      <div className="min-h-screen pt-32 px-8">
+        <div className="max-w-4xl mx-auto space-y-8">
+          <motion.div
+            className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-8 text-center"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <h1 className="text-4xl font-bold text-white mb-2">Interview Complete!</h1>
+            <p className="text-gray-400">{interview?.jobRole} — {interview?.questions?.length} questions answered</p>
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <ScoreCard label="Clarity" score={summary.clarity?.score || 0} explanation={summary.clarity?.explanation || ''} color="indigo" />
+            <ScoreCard label="Communication" score={summary.communication?.score || 0} explanation={summary.communication?.explanation || ''} color="purple" />
+            <ScoreCard label="Technical Accuracy" score={summary.technicalAccuracy?.score || 0} explanation={summary.technicalAccuracy?.explanation || ''} color="cyan" />
+          </div>
+
+          <motion.div
+            className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-8"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-white">Overall Score</h2>
+              <div className="text-5xl font-bold text-indigo-400">{summary.overallScore}/10</div>
+            </div>
+            <div className="w-full bg-gray-700/30 rounded-full h-3 mb-6">
+              <div className="h-full bg-indigo-500 rounded-full transition-all duration-700" style={{ width: `${((summary.overallScore || 0) / 10) * 100}%` }} />
+            </div>
+            <p className="text-gray-300">{summary.summaryFeedback}</p>
+          </motion.div>
+
+          {summary.areasToImprove?.length > 0 && (
+            <motion.div
+              className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-8"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 }}
+            >
+              <h2 className="text-2xl font-bold text-white mb-4">Areas to Improve</h2>
+              <ul className="space-y-2">
+                {summary.areasToImprove.map((area, i) => (
+                  <li key={i} className="flex items-start gap-3 text-gray-300">
+                    <span className="text-indigo-400 mt-1">•</span>
+                    {area}
+                  </li>
+                ))}
+              </ul>
+            </motion.div>
+          )}
+
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold text-white">Question History</h2>
+            {interview?.questions?.map((qa, index) => (
+              <motion.div
+                key={index}
+                className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-6"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.1 }}
+              >
+                <h3 className="text-lg font-semibold text-white mb-2">Question {index + 1}</h3>
+                <p className="text-gray-300 mb-3">{qa.question}</p>
+                <p className="text-sm text-gray-500 mb-1">Your Answer:</p>
+                <p className="text-gray-400 mb-3">{qa.answer}</p>
+                {qa.evaluation && (
+                  <div className="flex gap-4 text-sm text-gray-400">
+                    <span>Clarity: {qa.evaluation.clarity?.score}/10</span>
+                    <span>Communication: {qa.evaluation.language?.score}/10</span>
+                    <span>Technical: {qa.evaluation.technicalAccuracy?.score}/10</span>
+                  </div>
+                )}
+              </motion.div>
+            ))}
+          </div>
+
+          <div className="flex justify-center pb-16">
+            <motion.button
+              onClick={() => navigate('/my-interviews')}
+              className="px-8 py-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full text-white font-semibold"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              View All Interviews
+            </motion.button>
           </div>
         </div>
       </div>
@@ -275,19 +355,36 @@ function InterviewSession() {
     <div className="min-h-screen pt-20 sm:pt-32 px-4 sm:px-8">
       <div className="max-w-7xl mx-auto">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
-          {/* Left Section - Interview Content */}
+          {/* Left Section */}
           <div className="lg:col-span-2 space-y-4 sm:space-y-8">
             <div className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-4 sm:p-8">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2 sm:mb-4">
-                Interview for {interview?.jobRole}
-              </h2>
-              <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
-                Status: {interview?.status}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-gray-100">
+                    Interview for {interview?.jobRole}
+                  </h2>
+                  <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    Question {questionCount + 1} of 5
+                  </div>
+                </div>
+                {questionCount >= 1 && !completed && (
+                  <motion.button
+                    onClick={handleEndInterview}
+                    disabled={isCompleting}
+                    className="px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 rounded-full
+                      text-sm font-medium hover:bg-red-500/30 transition-colors
+                      disabled:opacity-50"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    {isCompleting ? 'Generating Results...' : 'End Interview'}
+                  </motion.button>
+                )}
               </div>
             </div>
 
-            {currentQuestion && (
-              <motion.div 
+            {currentQuestion && !completed && (
+              <motion.div
                 className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-4 sm:p-8"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -338,13 +435,10 @@ function InterviewSession() {
                       </motion.button>
                     </>
                   )}
-                  
+
                   {audioURL && (
                     <div className="mt-4 w-full max-w-md">
                       <audio src={audioURL} controls className="w-full" />
-                      <p className="text-sm text-gray-400 text-center mt-2">
-                        Preview your recording before it's processed
-                      </p>
                     </div>
                   )}
                 </div>
@@ -354,64 +448,39 @@ function InterviewSession() {
             {interview?.questions?.map((qa, index) => (
               <motion.div
                 key={index}
-                className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-8"
+                className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-6"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: index * 0.1 }}
               >
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">
                   Question {index + 1}
                 </h3>
-                <p className="text-gray-700 dark:text-gray-300 mb-4">
-                  {qa.question}
-                </p>
-                <p className="text-gray-600 dark:text-gray-400 mb-2">
-                  Your Answer:
-                </p>
-                <p className="text-gray-700 dark:text-gray-300 mb-4">
-                  {qa.answer}
-                </p>
+                <p className="text-gray-700 dark:text-gray-300 mb-3">{qa.question}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Your Answer:</p>
+                <p className="text-gray-600 dark:text-gray-400 mb-3">{qa.answer}</p>
                 {qa.evaluation && (
-                  <div className="mt-4 p-4 bg-white/5 rounded-lg">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                      Evaluation
-                    </h4>
-                    <p className="text-sm text-gray-700 dark:text-gray-300">
-                      {qa.evaluation.feedback}
-                    </p>
+                  <div className="flex flex-wrap gap-3 text-sm text-gray-400">
+                    {qa.evaluation.clarity && <span className="bg-white/5 px-2 py-1 rounded">Clarity: {qa.evaluation.clarity.score}/10</span>}
+                    {qa.evaluation.language && <span className="bg-white/5 px-2 py-1 rounded">Communication: {qa.evaluation.language.score}/10</span>}
+                    {qa.evaluation.technicalAccuracy && <span className="bg-white/5 px-2 py-1 rounded">Technical: {qa.evaluation.technicalAccuracy.score}/10</span>}
                   </div>
                 )}
               </motion.div>
             ))}
           </div>
 
-          {/* Right Section - Service Status */}
+          {/* Right Section */}
           <div className="space-y-4 sm:space-y-8">
             <div className="backdrop-blur-lg bg-white/5 border border-white/10 rounded-xl p-4 sm:p-8">
               <h3 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
                 Service Status
               </h3>
               <div className="space-y-3">
-                <ServiceNode 
-                  service="PDF Extraction" 
-                  status={serviceStatus.pdfExtraction} 
-                  isActive={activeService === 'pdfExtraction'} 
-                />
-                <ServiceNode 
-                  service="Question Generation" 
-                  status={serviceStatus.geminiQuestion} 
-                  isActive={activeService === 'geminiQuestion'} 
-                />
-                <ServiceNode 
-                  service="Speech to Text" 
-                  status={serviceStatus.speechToText} 
-                  isActive={activeService === 'speechToText'} 
-                />
-                <ServiceNode 
-                  service="Evaluation" 
-                  status={serviceStatus.geminiEvaluation} 
-                  isActive={activeService === 'geminiEvaluation'} 
-                />
+                <ServiceNode service="PDF Extraction" status={serviceStatus.pdfExtraction} isActive={activeService === 'pdfExtraction'} />
+                <ServiceNode service="Question Generation" status={serviceStatus.geminiQuestion} isActive={activeService === 'geminiQuestion'} />
+                <ServiceNode service="Speech to Text" status={serviceStatus.speechToText} isActive={activeService === 'speechToText'} />
+                <ServiceNode service="Evaluation" status={serviceStatus.geminiEvaluation} isActive={activeService === 'geminiEvaluation'} />
               </div>
             </div>
           </div>
@@ -421,4 +490,4 @@ function InterviewSession() {
   );
 }
 
-export default InterviewSession; 
+export default InterviewSession;

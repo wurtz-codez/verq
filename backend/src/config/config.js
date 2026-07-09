@@ -10,6 +10,9 @@ const config = {
   deepgram: {
     apiKey: process.env.DEEPGRAM_API_KEY,
   },
+  deepseek: {
+    apiKey: process.env.DEEPSEEK_API_KEY,
+  },
   server: {
     port: process.env.PORT || 3000,
     nodeEnv: process.env.NODE_ENV || 'development',
@@ -40,7 +43,7 @@ const config = {
 // Validate required environment variables
 function validateConfig() {
   const requiredEnvVars = [
-    'GEMINI_API_KEY',
+    'DEEPSEEK_API_KEY',
     'DEEPGRAM_API_KEY',
   ];
 

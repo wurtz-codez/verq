@@ -27,15 +27,30 @@ const interviewSchema = new mongoose.Schema({
   questions: [{
     question: String,
     answer: String,
-    evaluation: {
-      score: Number,
-      feedback: String
-    },
+    evaluation: mongoose.Schema.Types.Mixed,
     timestamp: {
       type: Date,
       default: Date.now
     }
   }],
+  // Final summary evaluation (after interview completion)
+  evaluationSummary: {
+    clarity: {
+      score: Number,
+      explanation: String
+    },
+    communication: {
+      score: Number,
+      explanation: String
+    },
+    technicalAccuracy: {
+      score: Number,
+      explanation: String
+    },
+    overallScore: Number,
+    areasToImprove: [String],
+    summaryFeedback: String
+  },
   // Timestamps
   createdAt: {
     type: Date,
